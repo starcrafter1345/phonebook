@@ -1,30 +1,11 @@
+require("dotenv").config();
+
 const express = require("express");
 const morgan = require("morgan");
+const mongoose = require("mongoose");
+const Person = require("./models/person");
 
 const PORT = process.env.PORT ?? 3001;
-
-let phoneBook = [
-  {
-    "id": "1",
-    "name": "Arto Hellas",
-    "number": "040-123456"
-  },
-  {
-    "id": "2",
-    "name": "Ada Lovelace",
-    "number": "39-44-5323523"
-  },
-  {
-    "id": "3",
-    "name": "Dan Abramov",
-    "number": "12-43-234345"
-  },
-  {
-    "id": "4",
-    "name": "Mary Poppendieck",
-    "number": "39-23-6423122"
-  }
-];
 
 const app = express();
 
@@ -35,53 +16,102 @@ morgan.token("body", (req, res) => JSON.stringify(req.body));
 
 app.use(morgan(':method :url :status :res[content-length] - :response-time ms :body'));
 
-app.get("/info", (req, res) => {
-  const date = new Date();
-
-  res.send(`
-    <p>Phonebook has info for ${phoneBook.length} people</p>
-    <p>${date.toString()}</p>
-  `);
+app.get("/info", (req, res, next) => {
+  Person.find({})
+    .then(persons => {
+      const date = new Date();
+      res.send(`
+        <p>Phonebook has info for ${persons.length} people</p>
+        <p>${date.toString()}</p>
+      `);
+    })
+    .catch(err => next(err));
 });
 
-app.get("/api/persons", (req, res) => {
-  res.json(phoneBook);
+app.get("/api/persons", (req, res, next) => {
+  Person.find({})
+    .then(persons => {
+      res.json(persons);
+    })
+    .catch(err => next(err));
 });
 
-app.post("/api/persons", (req, res) => {
-  const { name, number } = req.body;
+app.post("/api/persons", (req, res, next) => {
+  const {name, number} = req.body;
 
   if (!(name || number)) return res.status(400).json({error: "name or number is not passed"});
 
-  if (phoneBook.find(p => p.name === name)) return res.status(400).json({error: "this is already exists"});
-
-  const newPerson = {
-    id: Math.floor(Math.random() * 100).toString(),
+  const newPerson = new Person({
     name: name,
     number: number
-  }
+  });
 
-  phoneBook.push(newPerson);
-
-  res.status(201).end();
+  newPerson.save()
+    .then(person => {
+      res.status(201).json(person);
+    })
+    .catch(err => next(err))
 });
 
-app.get("/api/persons/:id", (req, res) => {
+app.put("/api/persons/:id", (req, res, next) => {
   const { id } = req.params;
-  const person = phoneBook.find(p => p.id.toString() === id.toString());
+  const { name, number } = req.body;
 
-  if (!person) {
-    return res.status(404).end();
-  }
+  if (!(name || number)) return res.status(400).send({error: "not all properties specified"});
 
-  res.json(person);
+  Person.findById(id)
+    .then(person => {
+      if (!person) return res.status(404).end();
+
+      person.name = name;
+      person.number = number;
+
+      return person.save({validateBeforeSave: true})
+        .then(updatedPerson => res.status(200));
+    })
+    .catch(err => next(err));
 });
 
-app.delete("/api/persons/:id", (req, res) => {
-  const { id } = req.params;
-  phoneBook = phoneBook.filter(p => p.id.toString() !== id.toString());
+app.get("/api/persons/:id", (req, res, next) => {
+  const {id} = req.params;
 
-  res.status(200).end();
+  Person.findById(id)
+    .then(person => {
+      if (!person) return res.status(404).end();
+
+      res.json(person);
+    })
+    .catch(err => next(err));
+});
+
+app.delete("/api/persons/:id", (req, res, next) => {
+  const {id} = req.params;
+
+  Person.findByIdAndDelete(id)
+    .then(result => {
+      res.status(204).end();
+    })
+    .catch(err => next(err));
 })
 
-app.listen(PORT, () => console.log(`Server is started at http://localhost:${PORT}/`));
+const errorHandler = (err, req, res, next) => {
+  console.error(err);
+
+  if (err.name === "CastError") {
+    return res.status(400).send({error: "malformatted id"});
+  } else if (err.name === "ValidationError") {
+    return res.status(400).json({error: err.message});
+  }
+
+  next(err);
+}
+
+app.use(errorHandler);
+
+mongoose.connect(process.env.MONGO_URI)
+  .then(() => {
+    app.listen(PORT, () => console.log(`Server is started at http://localhost:${PORT}/`));
+  })
+  .catch(err => {
+    console.log(err);
+  })
